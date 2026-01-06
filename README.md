@@ -13,8 +13,9 @@
 
 ### 🎵 Audiophile Edition Features
 
+- **🧠 Dynamic Loudness** - Fletcher-Munson inspired compensation (Bass +8dB at low vol, +2dB at high vol).
 - **💎 TPDF Dithering** - Triangular Probability Density Function dithering to eliminate digital quantization distortion.
-- **🎚️ 10-Band V-Shape EQ** - Optimized +4.5dB Bass / +2.5dB Treble profile with headroom scaling.
+- **🎚️ 3kHz AIR Treble** - Refined Treble cutoff (3000Hz) for vocal clarity without harshness.
 - **🛡️ Anti-Clipping** - 0.7x digital headroom scaler to prevent soft clipping on bass hits.
 - **🎯 PCM5102A Optimized** - Tuned for internal PLL usage (SCK->GND) and Charge Pump characteristics.
 
@@ -40,6 +41,7 @@
 
 ## 📋 Table of Contents
 
+- [Desktop App](#-desktop-app-new)
 - [Hardware Requirements](#hardware-requirements)
 - [Pin Configuration](#pin-configuration)
 - [Software Requirements](#software-requirements)
@@ -52,6 +54,32 @@
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [License](#license)
+
+---
+
+## 🖥️ Desktop App (NEW!)
+
+### Apple Music-Inspired Control Center
+
+Manage your ESP32 music player with a beautiful desktop application featuring:
+
+- **🎨 Premium Design** - Glassmorphism, vibrant gradients, Apple Music aesthetics
+- **📚 Library Management** - Browse, play, delete, and rename tracks
+- **📤 File Upload** - Drag & drop MP3/WAV files to SD card
+- **📊 Real-time Monitoring** - Track info, volume, system stats
+- **⚡ Auto-connect** - Remembers your device
+
+![Desktop App](desktop-app/.screenshots/player_interface.png)
+
+### Quick Start
+
+```bash
+cd desktop-app
+npm install
+npm start
+```
+
+👉 **[Full Desktop App Documentation →](desktop-app/README.md)**
 
 ---
 
@@ -332,7 +360,16 @@ SD Card → Chunk Parser → Volume Control → Fade In/Out → I2S DMA → DAC 
 ESP32-S3-HiFi-DAP/
 ├── src/
 │   └── WavPlayer/
-│       └── WavPlayer.ino          # Main application (744 lines)
+│       └── WavPlayer.ino          # Main firmware (1457 lines)
+├── desktop-app/                   # 🆕 Desktop Control Center
+│   ├── src/
+│   │   ├── main.js                # Electron main process
+│   │   ├── renderer.js            # UI logic (383 lines)
+│   │   ├── styles.css             # Apple-style CSS (600+ lines)
+│   │   ├── index.html             # Main interface
+│   │   └── demo.html              # Standalone demo
+│   ├── package.json
+│   └── README.md                  # Desktop app docs
 ├── scripts/
 │   ├── audio_converter.py         # Audio format converter
 │   ├── upload.py                  # Build & upload tool
@@ -341,10 +378,6 @@ ESP32-S3-HiFi-DAP/
 │   ├── architecture.md            # System architecture
 │   ├── wav_player_guide.md        # User guide
 │   └── audio_converter_guide.md   # Converter manual
-├── .gemini/antigravity/brain/
-│   ├── task.md                    # Development tasks
-│   ├── implementation_plan.md     # Design document
-│   └── walkthrough.md             # Feature walkthrough
 └── README.md                      # This file
 ```
 

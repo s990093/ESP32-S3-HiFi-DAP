@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>ESP32 Music Center</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  </head>
+  <body>
+    <!-- Settings Modal -->
+    <div id="settings-overlay" class="overlay" style="display: none">
+      <div class="modal">
+        <h2>Audio Settings</h2>
+        <label>Buffer Size (bytes)</label>
+        <select id="cfg-buf-size">
+          <option value="4096">4096 (Low Latency)</option>
+          <option value="8192">8192 (Balanced)</option>
+          <option value="16384">16384 (Stable)</option>
+        </select>
+
+        <label>Max Tracks</label>
+        <input type="number" id="cfg-max-tracks" value="255" />
+
+        <div class="modal-actions">
+          <button onclick="closeSettings()">Cancel</button>
+          <button class="primary" onclick="saveSettings()">
+            Save & Reboot
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="connection-overlay" class="overlay">
+      <div class="modal">
+        <h2>Select Device</h2>
+        <p style="color: #888">Please connect your ESP32 Music Center</p>
+        <select id="port-selector"></select>
+        <button class="primary" onclick="connectDevice()">Connect</button>
+        <button onclick="scanPorts()">Rescan</button>
+      </div>
+    </div>
+
+    <div id="upload-overlay" class="overlay" style="display: none">
+      <div class="modal" style="width: 400px">
+        <h3>Uploading...</h3>
+        <p
+          id="upload-filename"
+          style="margin-bottom: 5px; color: var(--accent-color)"
+        >
+          song.mp3
+        </p>
+        <div
+          style="
+            background: #444;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 20px 0;
+          "
+        >
+          <div
+            id="upload-bar"
+            style="background: var(--accent-color); width: 0%; height: 100%"
+          ></div>
+        </div>
+        <p id="upload-percent">0%</p>
+      </div>
+    </div>
+
+    <div id="sidebar">
+      <h3 style="margin-left: 10px; margin-bottom: 20px">ESP32 Music Center</h3>
+
+      <!-- Nav -->
+      <button
+        class="nav-btn active"
+        onclick="switchView('library')"
+        id="nav-library"
+      >
+        <span>🎵</span> Library
+      </button>
+      <button class="nav-btn" onclick="switchView('upload')" id="nav-upload">
+        <span>📤</span> Upload
+      </button>
+
+      <div style="flex-grow: 1"></div>
+
+      <div class="status-card">
+        <div class="status-row">
+          <span>State:</span> <span id="status-state">--</span>
+        </div>
+        <div class="status-row">
+          <span>Track:</span> <span id="status-track">--</span>
+        </div>
+        <div class="status-row">
+          <span>Volume:</span> <span id="status-vol">--</span>
+        </div>
+      </div>
+      <div class="status-card">
+        <div class="status-row">
+          <span>Heap:</span> <span id="sys-heap">--</span>
+        </div>
+        <div class="status-row">
+          <span>Uptime:</span> <span id="sys-uptime">--</span>
+        </div>
+        <div class="status-row" style="margin-top: 10px; display: block">
+          <div
+            style="
+              display: flex;
+              justify-content: space-between;
+              font-size: 11px;
+              color: #888;
+            "
+          >
+            <span>SD Storage</span>
+            <span id="sd-text">--/--</span>
+          </div>
+          <div class="sd-bar-container">
+            <div id="sd-bar-fill" class="sd-bar-fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="main">
+      <div id="header">
+        <span id="device-info">Disconnected</span>
+        <div class="toolbar">
+          <button onclick="openSettings()">⚙️ Settings</button>
+        </div>
+      </div>
+
+      <!-- View: Library -->
+      <div id="view-library" class="view-section active">
+        <ul id="file-list">
+          <!-- Tracks injected here -->
+        </ul>
+        <div style="padding: 10px 20px">
+          <button onclick="refreshLibrary()">🔄 Refresh List</button>
+        </div>
+      </div>
+
+      <!-- View: Upload -->
+      <div id="view-upload" class="view-section">
+        <div
+          class="upload-zone"
+          id="drop-zone"
+          onclick="document.getElementById('file-input').click()"
+        >
+          <h1 style="font-size: 48px; margin: 0">📤</h1>
+          <h2>Upload Music</h2>
+          <p>Drag MP3/WAV files here or click to browse</p>
+          <button class="primary" style="font-size: 16px; padding: 12px 24px">
+            Select File
+          </button>
+          <input
+            type="file"
+            id="file-input"
+            style="display: none"
+            accept=".mp3,.wav"
+            onchange="handleFileSelect(this)"
+          />
+        </div>
+
+        <div id="upload-status-box" style="margin: 0 40px 40px; display: none">
+          <h3 id="upload-filename-embedded" style="color: var(--accent-color)">
+            Uploading...
+          </h3>
+          <div
+            style="
+              background: #444;
+              height: 12px;
+              border-radius: 6px;
+              overflow: hidden;
+              margin: 10px 0;
+            "
+          >
+            <div
+              id="upload-bar-embedded"
+              style="background: var(--accent-color); width: 0%; height: 100%"
+            ></div>
+          </div>
+          <p
+            id="upload-percent-embedded"
+            style="text-align: right; color: #888"
+          >
+            0%
+          </p>
+        </div>
+      </div>
+
+      <div id="player-bar">
+        <!-- Progress Bar -->
+        <div class="progress-container">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+
+        <!-- Now Playing Section -->
+        <div>
+          <div class="album-art">🎵</div>
+          <div class="track-info-container">
+            <div id="now-playing-title">No Track Selected</div>
+            <div id="now-playing-time">--:--</div>
+          </div>
+        </div>
+
+        <!-- Controls Section -->
+        <div class="controls">
+          <button class="control-btn" onclick="sendCmd('prev')" title="Previous">⏮</button>
+          <button class="control-btn" id="btn-play" onclick="togglePlay()" title="Play/Pause">▶</button>
+          <button class="control-btn" onclick="sendCmd('next')" title="Next">⏭</button>
+        </div>
+
+        <!-- Volume Section -->
+        <div>
+          🔊 <span id="vol-display">--</span>
+        </div>
+      </div>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>

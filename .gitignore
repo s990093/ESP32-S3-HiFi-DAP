@@ -7,18 +7,26 @@
 
 # Build artifacts
 *.bin
+*.__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+.DS_Store
 *.elf
-*.map
+build/
+*.o
+
+# Desktop app
+desktop-app/node_modules/
+desktop-app/.DS_Store
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
 *~
 
 # OS
-.DS_Store
 Thumbs.db
 
 # Logs
