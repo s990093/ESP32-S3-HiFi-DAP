@@ -28,6 +28,8 @@
 - **🎚️ Cubic Volume Control** - Enhanced low-volume precision (`vol^3` curve)
 - **🔇 Pop-Free Audio** - Fade in/out on play/pause/track changes
 - **🎮 Hardware Button Control** - Physical buttons with combo actions (e.g. Loop Toggle)
+- **🔁 Loop Control** - Cycle loop modes: Off → Single → All via button combo
+- **🚀 Startup Splash** - Animated splash screen on app launch
 
 ### 🚀 Advanced Features
 
@@ -66,7 +68,8 @@ Manage your ESP32 music player with a beautiful desktop application featuring:
 - **🎨 Premium Design** - Glassmorphism, vibrant gradients, Apple Music aesthetics
 - **📚 Library Management** - Browse, play, delete, and rename tracks
 - **📤 File Upload** - Drag & drop MP3/WAV files to SD card
-- **📊 Real-time Monitoring** - Track info, volume, system stats
+- **📊 System Diagnostics** - View real-time CPU usage, task states, and memory health (htop-style)
+- **💾 Storage Monitor** - Visual SD card usage bar
 - **⚡ Auto-connect** - Remembers your device
 
 ![Desktop App](desktop-app/.screenshots/player_interface.png)
@@ -255,13 +258,14 @@ After power cycle, it resumes from the last position.
 
 Connect via serial terminal (460800 baud) and use these commands:
 
-| Command  | Alias    | Description                                      |
-| -------- | -------- | ------------------------------------------------ |
-| `mem`    | `memory` | Show memory usage (heap, PSRAM) with visual bars |
-| `status` | `s`      | Display current playback state                   |
-| `save`   | -        | Manually save playback position to NVS           |
-| `resume` | -        | Restore playback position from NVS               |
-| `help`   | `h`, `?` | Show command list                                |
+| Command  | Alias        | Description                                      |
+| -------- | ------------ | ------------------------------------------------ |
+| `mem`    | `memory`     | Show memory usage (heap, PSRAM) with visual bars |
+| `tasks`  | `tasks_json` | Show FreeRTOS task stats (CPU%, Stack, State)    |
+| `status` | `s`          | Display current playback state                   |
+| `save`   | -            | Manually save playback position to NVS           |
+| `resume` | -            | Restore playback position from NVS               |
+| `help`   | `h`, `?`     | Show command list                                |
 
 ### Example: Memory Status
 

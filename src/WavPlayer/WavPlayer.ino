@@ -55,9 +55,9 @@
 
 // ========== Configuration ==========
 #define I2S_NUM         I2S_NUM_0
-#define BUFFER_SIZE     8192
+#define BUFFER_SIZE     32768  // 32KB - Large buffer for MP3 decoder stability
 #define MAX_TRACKS      32
-#define MAX_FILENAME    64
+#define MAX_FILENAME    256  // Increased for long Unicode filenames (日本語対応)
 #define DEBOUNCE_MS     200
 #define LONG_PRESS_MS   500
 #define DOUBLE_CLICK_MS 400
@@ -96,7 +96,14 @@ volatile LoopMode loopMode = LOOP_ALL;  // Default: loop playlist
 
 // Memory-safe: Fixed arrays instead of String
 char playlist[MAX_TRACKS][MAX_FILENAME];
+
 int playlistSize = 0;
+
+// ========== File Upload State ==========
+volatile bool isReceivingFile = false;
+File uploadFile;
+size_t uploadRemaining = 0;
+unsigned long lastUploadActivity = 0;
 
 // ========== Audio Processing (Global) ==========
 
@@ -112,14 +119,14 @@ int playlistSize = 0;
 
 // Frequency Ranges
 #define BASS_CUTOFF_HZ  100.0f 
-#define TREB_CUTOFF_HZ  750.0f
+#define TREB_CUTOFF_HZ  3000.0f // ✨ Updated to 3kHz for "Air" and Vocal Clarity
 
 // Headroom (Crucial for V-Shape EQ to prevent clipping)
 #define HEADROOM_SCALER 0.707f // -3dB
 
 const float PI_F = 3.14159265359f;
-const float BASS_G = pow(10.0f, TARGET_BASS_DB / 20.0f); 
-const float TREB_G = pow(10.0f, TARGET_TREB_DB / 20.0f);
+
+// Gains are now dynamic variables managed by AudioOutputWithEQ
 const float dt = 1.0f / SAMPLE_RATE;
 const float ALPHA_LOW = (2.0f * PI_F * dt * BASS_CUTOFF_HZ) / (1.0f + 2.0f * PI_F * dt * BASS_CUTOFF_HZ);
 const float ALPHA_HIGH = 1.0f / (1.0f + 2.0f * PI_F * dt * TREB_CUTOFF_HZ); 
@@ -133,6 +140,28 @@ public:
         : ESP32I2SAudio(bck, ws, data, mclk) {
             // Initialize RNG
             rand_state = 123456789;
+            // Initialize Gains (Default to flat or updated immediately)
+            current_bass_gain = 1.0f; 
+            current_treb_gain = 1.0f;
+    }
+
+    // 🔊 Dynamic Loudness Compensation (Fletcher-Munson inspired)
+    // Called whenever volume changes
+    void updateLoudness(int volume_percent) {
+        float vol = (float)volume_percent / 100.0f;
+        
+        // Inverse relationship: Lower volume = Higher boost
+        // Max Bass Boost (at low vol): +8dB
+        // Min Bass Boost (at max vol): +2dB
+        float target_bass_db = 8.0f * (1.0f - vol); 
+        float target_treb_db = 4.0f * (1.0f - vol);
+        
+        // Clamp minimums (Keep V-Shape character even at max volume)
+        if (target_bass_db < 2.0f) target_bass_db = 2.0f; 
+        if (target_treb_db < 1.0f) target_treb_db = 1.0f;
+
+        current_bass_gain = pow(10.0f, target_bass_db / 20.0f);
+        current_treb_gain = pow(10.0f, target_treb_db / 20.0f);
     }
 
     // Override the raw write function to intercept ALL audio data (MP3 & WAV)
@@ -183,8 +212,34 @@ public:
         return ESP32I2SAudio::write(buffer, size);
     }
 
+    // Internal Helper: Shelving Filter
+    int16_t applyShelving(int16_t sample, float& prev_in, float& prev_out, bool highpass) {
+        float in = (float)sample;
+        float out;
+        float alpha;
+        float gain;
+
+        if (highpass) {
+            alpha = ALPHA_HIGH; gain = current_treb_gain;
+            float hp = alpha * (prev_out + in - prev_in);
+            out = in + (gain - 1.0f) * hp;
+            prev_out = hp;
+        } else {
+            alpha = ALPHA_LOW; gain = current_bass_gain;
+            float lp = alpha * in + (1.0f - alpha) * prev_out;
+            out = in + (gain - 1.0f) * lp;
+            prev_out = lp;
+        }
+        prev_in = in;
+        return (int16_t)out; 
+    }
+
 private:
     unsigned long rand_state;
+    // Dynamic Gain State
+    float current_bass_gain;
+    float current_treb_gain;
+
     // EQ State Variables
     float bass_l_prev_in = 0, bass_l_prev_out = 0;
     float bass_r_prev_in = 0, bass_r_prev_out = 0;
@@ -197,28 +252,6 @@ private:
         rand_state ^= (rand_state >> 17);
         rand_state ^= (rand_state << 5);
         return (int16_t)((rand_state & 0x01) - ((rand_state >> 1) & 0x01));
-    }
-
-    // Internal Helper: Shelving Filter
-    int16_t applyShelving(int16_t sample, float& prev_in, float& prev_out, bool highpass) {
-        float in = (float)sample;
-        float out;
-        float alpha;
-        float gain;
-
-        if (highpass) {
-            alpha = ALPHA_HIGH; gain = TREB_G;
-            float hp = alpha * (prev_out + in - prev_in);
-            out = in + (gain - 1.0f) * hp;
-            prev_out = hp;
-        } else {
-            alpha = ALPHA_LOW; gain = BASS_G;
-            float lp = alpha * in + (1.0f - alpha) * prev_out;
-            out = in + (gain - 1.0f) * lp;
-            prev_out = lp;
-        }
-        prev_in = in;
-        return (int16_t)out; 
     }
 };
 
@@ -427,16 +460,17 @@ void audioPlaybackTask(void* parameter) {
           delete audioOut; 
           audioOut = NULL; 
       } 
-      // WAV/MP3 Playback Logic
+      // Setup Audiophile Output
       if (audioOut == NULL) {
-          // Initialize Audiophile Audio Output
           audioOut = new AudioOutputWithEQ(I2S_BCK, I2S_WS, I2S_DATA);
           audioOut->begin();
-          // Set initial volume handled by decoders
-          // float gain = pow((float)currentVolume / 20.0f, 3.0f);
-          // audioOut->setGain(gain); // Removed: ESP32I2SAudio doesn't support setGain
-
+          
+          // Initial Loudness Update
+          float gain = pow((float)currentVolume / 20.0f, 3.0f);
+          // audioOut->setGain(gain); // Not supported
+          audioOut->updateLoudness(currentVolume); 
       }
+
       
       xSemaphoreTake(stateMutex, portMAX_DELAY);
       int track = currentTrack;
@@ -488,6 +522,14 @@ void audioPlaybackTask(void* parameter) {
     
     // === Data Feed Loop ===
     if (audioFile && (mp3Decoder || wavDecoder)) {
+      static int lastAppliedVolume = -1;
+      
+      // Update Loudness Compensation if volume changed
+      if (currentVolume != lastAppliedVolume) {
+          audioOut->updateLoudness(currentVolume);
+          lastAppliedVolume = currentVolume;
+      }
+
       // Check if decoder handles volume
       // TUNING: Use cubic curve (vol^3) for better low-volume control (Headphone friendly)
       // NOTE: 10-band EQ not supported natively by BackgroundAudio lib.
@@ -561,6 +603,12 @@ void buttonHandlerTask(void* parameter) {
   static unsigned long lastSave = 0;
   
   while (true) {
+    // 1. Sync Wait: If PREV or NEXT is pressed, wait briefly to check for COMBO
+    // This prevents "Next Track" from firing when the user executes a simultaneous press.
+    if (btnPressed[2] || btnPressed[3]) {
+        vTaskDelay(50 / portTICK_PERIOD_MS); 
+    }
+
     // Check simultaneous press (PREV + NEXT) for Loop Mode Toggle
     if (digitalRead(BTN_PREV) == HIGH && digitalRead(BTN_NEXT) == HIGH) {
        unsigned long comboStart = millis();
@@ -568,7 +616,7 @@ void buttonHandlerTask(void* parameter) {
        
        // Wait to see if held
        while (digitalRead(BTN_PREV) == HIGH && digitalRead(BTN_NEXT) == HIGH) {
-          if (!toggled && millis() - comboStart > 1000) { // Hold for 1 sec
+          if (!toggled && millis() - comboStart > 500) { // Hold for 0.5 sec
              // Trigger Toggle
              xSemaphoreTake(stateMutex, portMAX_DELAY);
              if (loopMode == LOOP_SINGLE) {
@@ -695,14 +743,22 @@ void buttonHandlerTask(void* parameter) {
   }
 }
 
+
 // ========== Serial Command Handler ==========
 void handleSerialCommand() {
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
-    cmd.toLowerCase();
     
-    if (cmd == "mem" || cmd == "memory") {
+    // Extract command keyword (before first space) and lowercase ONLY that
+    String cmdKeyword = cmd;
+    int firstSpace = cmd.indexOf(' ');
+    if (firstSpace > 0) {
+        cmdKeyword = cmd.substring(0, firstSpace);
+    }
+    cmdKeyword.toLowerCase();
+    
+    if (cmdKeyword == "mem" || cmdKeyword == "memory") {
       uint32_t freeHeap = ESP.getFreeHeap();
       uint32_t heapSize = ESP.getHeapSize();
       uint32_t usedHeap = heapSize - freeHeap;
@@ -749,7 +805,7 @@ void handleSerialCommand() {
       }
       Serial.println();
     }
-    else if (cmd == "cpu" || cmd == "tasks") {
+    else if (cmdKeyword == "cpu" || cmdKeyword == "tasks") {
       Serial.println("\n╔════════════════════════════════════════╗");
       Serial.println("║         Task Status (FreeRTOS)         ║");
       Serial.println("╚════════════════════════════════════════╝");
@@ -783,7 +839,7 @@ void handleSerialCommand() {
       }
       Serial.println();
     }
-    else if (cmd == "status" || cmd == "s") {
+    else if (cmdKeyword == "status" || cmdKeyword == "s") {
       xSemaphoreTake(stateMutex, portMAX_DELAY);
       Serial.println("\n╔════════════════════════════════════════╗");
       Serial.println("║         Player Status                  ║");
@@ -818,7 +874,7 @@ void handleSerialCommand() {
       Serial.printf("Uptime:  %lu sec\n\n", millis() / 1000);
       xSemaphoreGive(stateMutex);
     }
-    else if (cmd == "loop") {
+    else if (cmdKeyword == "loop") {
       xSemaphoreTake(stateMutex, portMAX_DELAY);
       // Cycle through loop modes
       loopMode = (LoopMode)((loopMode + 1) % 3);
@@ -829,22 +885,22 @@ void handleSerialCommand() {
       xSemaphoreGive(stateMutex);
       savePlaybackState();
     }
-    else if (cmd == "resume") {
+    else if (cmdKeyword == "resume") {
       loadPlaybackState();
       Serial.println("✅ Playback state restored");
     }
-    else if (cmd == "save") {
+    else if (cmdKeyword == "save") {
       savePlaybackState();
       Serial.println("✅ Playback state saved");
     }
-    else if (cmd == "clear" || cmd == "reset") {
+    else if (cmdKeyword == "clear" || cmdKeyword == "reset") {
       prefs.begin("wavplayer", false);
       prefs.clear();  // Clear all keys
       prefs.end();
       currentPosition = 0;
       Serial.println("🗑️  NVS cleared - all saved state deleted");
     }
-    else if (cmd == "tree" || cmd == "ls") {
+    else if (cmdKeyword == "tree" || cmdKeyword == "ls") {
       Serial.println("\n📁 SD Card Structure:");
       Serial.println("═══════════════════════════════════════");
       
@@ -945,7 +1001,7 @@ void handleSerialCommand() {
         Serial.println();
       }
     }
-    else if (cmd == "nvs" || cmd == "read") {
+    else if (cmdKeyword == "nvs" || cmdKeyword == "read") {
       Serial.println("\n╔════════════════════════════════════════╗");
       Serial.println("║         NVS Storage (Flash)            ║");
       Serial.println("╚════════════════════════════════════════╝");
@@ -992,7 +1048,7 @@ void handleSerialCommand() {
       Serial.println("    - 'save'   - Force save current state");
       Serial.println("    - 'resume' - Reload saved state\n");
     }
-    else if (cmd == "settings" || cmd == "config") {
+    else if (cmdKeyword == "settings" || cmdKeyword == "config") {
       Serial.println("\n╔════════════════════════════════════════╗");
       Serial.println("║         System Settings                ║");
       Serial.println("╚════════════════════════════════════════╝");
@@ -1037,7 +1093,7 @@ void handleSerialCommand() {
       Serial.println("  ✓ NVS playback resume");
       Serial.println("  ✓ Hidden file filtering\n");
     }
-    else if (cmd == "help" || cmd == "h" || cmd == "?") {
+    else if (cmdKeyword == "help" || cmdKeyword == "h" || cmdKeyword == "?") {
       Serial.println("\n╔════════════════════════════════════════╗");
       Serial.println("║         Available Commands             ║");
       Serial.println("╚════════════════════════════════════════╝");
@@ -1053,6 +1109,347 @@ void handleSerialCommand() {
       Serial.println("  resume       - Restore playback state");
       Serial.println("  help, h, ?   - Show this help\n");
     }
+
+    
+    // ========== FIRMWARE JSON API (Phase 1) ==========
+    else if (cmdKeyword == "info_json") {
+       Serial.println("{\"device\":\"ESP32-S3-HiFi-DAP\",\"version\":\"3.2.0\",\"api\":1}");
+    }
+    else if (cmdKeyword == "sys_json") {
+       uint32_t freeHeap = ESP.getFreeHeap();
+       uint32_t heapSize = ESP.getHeapSize();
+       uint32_t freePsram = ESP.getFreePsram();
+       uint32_t psramSize = ESP.getPsramSize();
+       
+       Serial.printf("{\"heap_free\":%u,\"heap_total\":%u,\"psram_free\":%u,\"psram_total\":%u,\"uptime\":%lu}\n",
+                     freeHeap, heapSize, freePsram, psramSize, millis() / 1000);
+    }
+    else if (cmdKeyword == "tasks_json") {
+       // --- Delta CPU Calculation Globals (Static) ---
+       static unsigned long prevTotalRunTime = 0;
+       static unsigned long prevTaskRunTimes[16] = {0}; // Max 16 tasks for tracking
+       static TaskHandle_t  prevTaskHandles[16] = {NULL};
+       
+       unsigned long ulTotalRunTime;
+       UBaseType_t uxArraySize = uxTaskGetNumberOfTasks();
+       TaskStatus_t *pxTaskStatusArray = (TaskStatus_t *)pvPortMalloc(uxArraySize * sizeof(TaskStatus_t));
+
+       if (pxTaskStatusArray != NULL) {
+          // Get current snapshot
+          uxArraySize = uxTaskGetSystemState(pxTaskStatusArray, uxArraySize, &ulTotalRunTime);
+          
+          // Calculate Total Delta
+          unsigned long totalDelta = ulTotalRunTime - prevTotalRunTime;
+          // Avoid div by zero or initial spike
+          if (totalDelta == 0) totalDelta = 1; 
+          
+          prevTotalRunTime = ulTotalRunTime; // Update for next time
+
+          // Sort or just map? We need to match tasks to their previous state to calc delta.
+          // Simple approach: Linear search in prev array by TaskHandle.
+          
+          Serial.print("{\"tasks\":[");
+          for (UBaseType_t i = 0; i < uxArraySize; i++) {
+             if (i > 0) Serial.print(",");
+             
+             // --- Delta Logic ---
+             unsigned long taskCurrentTime = pxTaskStatusArray[i].ulRunTimeCounter;
+             unsigned long taskDelta = taskCurrentTime; // Default to absolute if new
+             
+             // Find previous record for this specific task
+             for(int k=0; k<16; k++) {
+                 if (prevTaskHandles[k] == pxTaskStatusArray[i].xHandle) {
+                     if (taskCurrentTime >= prevTaskRunTimes[k]) {
+                        taskDelta = taskCurrentTime - prevTaskRunTimes[k];
+                     }
+                     break; 
+                 }
+             }
+             
+             // Update history (dumb slot filling)
+             bool found = false;
+             for(int k=0; k<16; k++) {
+                 if (prevTaskHandles[k] == pxTaskStatusArray[i].xHandle) {
+                     prevTaskRunTimes[k] = taskCurrentTime;
+                     found = true;
+                     break;
+                 }
+             }
+             if (!found) {
+                 for(int k=0; k<16; k++) {
+                     if (prevTaskHandles[k] == NULL) {
+                         prevTaskHandles[k] = pxTaskStatusArray[i].xHandle;
+                         prevTaskRunTimes[k] = taskCurrentTime;
+                         break;
+                     }
+                 }
+             }
+
+             // Calc %
+             float cpu = (float)taskDelta / (float)totalDelta * 100.0;
+             if (cpu > 100.0) cpu = 0.0; // Overflow sanity
+             
+             // Map State
+             char state;
+             switch (pxTaskStatusArray[i].eCurrentState) {
+                 case eRunning:   state = 'X'; break;
+                 case eReady:     state = 'R'; break;
+                 case eBlocked:   state = 'B'; break;
+                 case eSuspended: state = 'S'; break;
+                 case eDeleted:   state = 'D'; break;
+                 default:         state = '?'; break;
+             }
+
+             // Handle ESP32 Core ID
+             int core = pxTaskStatusArray[i].xCoreID;
+             if (core > 1) core = -1; // Any core
+
+             Serial.printf("{\"name\":\"%s\",\"state\":\"%c\",\"prio\":%u,\"stack\":%u,\"id\":%u,\"cpu\":%.1f,\"core\":%d}",
+                pxTaskStatusArray[i].pcTaskName,
+                state,
+                pxTaskStatusArray[i].uxCurrentPriority,
+                pxTaskStatusArray[i].usStackHighWaterMark,
+                pxTaskStatusArray[i].xTaskNumber,
+                cpu,
+                core
+             );
+          }
+          Serial.println("]}");
+          vPortFree(pxTaskStatusArray);
+       } else {
+          Serial.println("{\"error\":\"malloc_failed\"}");
+       }
+    }
+    else if (cmdKeyword == "config_json") {
+       Serial.printf("{\"buffer_size\":%d,\"sample_rate\":44100,\"fade_samples\":%d,\"max_tracks\":%d}\n",
+                     BUFFER_SIZE, FADE_SAMPLES, MAX_TRACKS);
+    }
+    else if (cmdKeyword == "status_json") {
+       xSemaphoreTake(stateMutex, portMAX_DELAY);
+       const char* stateStr = (playbackState == STATE_PLAYING) ? "playing" : 
+                              (playbackState == STATE_PAUSED) ? "paused" : "stopped";
+       const char* loopStr = (loopMode == LOOP_NONE) ? "off" :
+                             (loopMode == LOOP_SINGLE) ? "single" : "all";
+       
+       // Escape filename manually if needed (simple quote check)
+       // For now assuming clean filenames
+       Serial.printf("{\"state\":\"%s\",\"track_index\":%d,\"track_total\":%d,\"volume\":%d,\"loop\":\"%s\",\"file\":\"%s\",\"position\":%lu}\n",
+                     stateStr, currentTrack, playlistSize, currentVolume, loopStr, 
+                     (playlistSize > 0) ? playlist[currentTrack] : "", currentPosition);
+       xSemaphoreGive(stateMutex);
+    }
+    else if (cmdKeyword == "list_json") {
+       Serial.print("{\"files\":[");
+       File root = SD.open("/");
+       if (root) {
+         File file = root.openNextFile();
+         bool first = true;
+         while (file) {
+           if (!file.isDirectory()) {
+             String fname = String(file.name());
+             if (!fname.startsWith("._") && !fname.startsWith("/._")) { // Filter hidden
+                 if (!first) Serial.print(",");
+                 Serial.printf("{\"name\":\"%s\",\"size\":%lu}", file.name(), file.size());
+                 first = false;
+             }
+           }
+           file = root.openNextFile();
+         }
+       }
+       Serial.println("]}");
+    }
+    else if (cmd.startsWith("delete ")) {
+       String path = cmd.substring(7);
+       if (!path.startsWith("/")) path = "/" + path;
+       
+       if (SD.exists(path)) {
+         if (SD.remove(path)) Serial.println("SUCCESS");
+         else Serial.println("ERROR: Delete failed");
+       } else {
+         Serial.println("ERROR: File not found");
+       }
+    }
+    
+    // ========== PLAYBACK CONTROL COMMANDS ==========
+    else if (cmd.startsWith("play ")) {
+       String filename = cmd.substring(5);
+       if (!filename.startsWith("/")) filename = "/" + filename;
+       
+       Serial.printf("DEBUG: Play command received\n");
+       Serial.printf("DEBUG: Filename: '%s'\n", filename.c_str());
+       Serial.printf("DEBUG: Playlist size: %d\n", playlistSize);
+       
+       // Find the file in playlist
+       bool found = false;
+       for (int i = 0; i < playlistSize; i++) {
+           Serial.printf("DEBUG: Comparing with playlist[%d]: '%s'\n", i, playlist[i]);
+           if (String(playlist[i]) == filename) {
+               xSemaphoreTake(stateMutex, portMAX_DELAY);
+               currentTrack = i;
+               trackChanged = true;
+               currentPosition = 0;
+               playbackState = STATE_PLAYING;
+               xSemaphoreGive(stateMutex);
+               found = true;
+               Serial.printf("✅ Match found! Playing track %d\n", i);
+               break;
+           }
+       }
+       
+       if (!found) {
+           Serial.println("ERROR: File not in playlist");
+       }
+    }
+    else if (cmdKeyword == "pause") {
+       xSemaphoreTake(stateMutex, portMAX_DELAY);
+       playbackState = STATE_PAUSED;
+       xSemaphoreGive(stateMutex);
+       Serial.println("⏸️ Paused");
+    }
+    else if (cmd == "resume") {
+       xSemaphoreTake(stateMutex, portMAX_DELAY);
+       playbackState = STATE_PLAYING;
+       xSemaphoreGive(stateMutex);
+       Serial.println("▶️ Resumed");
+    }
+    else if (cmdKeyword == "next") {
+       xSemaphoreTake(stateMutex, portMAX_DELAY);
+       currentTrack = (currentTrack + 1) % playlistSize;
+       trackChanged = true;
+       currentPosition = 0;
+       xSemaphoreGive(stateMutex);
+       Serial.println("⏭️ Next Track");
+    }
+    else if (cmdKeyword == "prev") {
+       xSemaphoreTake(stateMutex, portMAX_DELAY);
+       currentTrack = (currentTrack - 1 + playlistSize) % playlistSize;
+       trackChanged = true;
+       currentPosition = 0;
+       xSemaphoreGive(stateMutex);
+       Serial.println("⏮️ Previous Track");
+    }
+    else if (cmdKeyword == "loop") {
+       xSemaphoreTake(stateMutex, portMAX_DELAY);
+       // Cycle: ALL -> SINGLE -> NONE
+       loopMode = (LoopMode)((loopMode + 1) % 3);
+       xSemaphoreGive(stateMutex);
+       
+       const char* modeStr = (loopMode == LOOP_NONE) ? "Off" :
+                             (loopMode == LOOP_SINGLE) ? "Single" : "All";
+       Serial.printf("🔁 Loop Mode: %s\n", modeStr);
+       savePlaybackState();
+    }
+    
+     else if (cmd.startsWith("volume ")) {
+       String volStr = cmd.substring(7);
+       int newVol = volStr.toInt();
+       
+       // Clamp 0-100
+       newVol = max(0, min(100, newVol));
+       
+       xSemaphoreTake(stateMutex, portMAX_DELAY);
+       currentVolume = newVol;
+       xSemaphoreGive(stateMutex);
+       
+       Serial.printf("🔊 Volume set to %d%%\n", currentVolume);
+       savePlaybackState();
+     }
+     else if (cmdKeyword == "storage_json") {
+       uint64_t totalBytes = SD.totalBytes();
+       uint64_t usedBytes = SD.usedBytes();
+       uint64_t freeBytes = totalBytes - usedBytes;
+       
+       Serial.printf("{\"total\":%llu,\"used\":%llu,\"free\":%llu}\n", totalBytes, usedBytes, freeBytes);
+     }
+     
+     // ========== FILE MANAGEMENT COMMANDS ==========
+     else if (cmd.startsWith("rename ")) {
+       int firstSpace = cmd.indexOf(' ');
+       int secondSpace = cmd.indexOf(' ', firstSpace + 1);
+       
+       if (firstSpace > 0 && secondSpace > firstSpace) {
+         String oldName = cmd.substring(firstSpace + 1, secondSpace);
+         String newName = cmd.substring(secondSpace + 1);
+         if (!oldName.startsWith("/")) oldName = "/" + oldName;
+         if (!newName.startsWith("/")) newName = "/" + newName;
+         
+         if (SD.exists(oldName)) {
+           if (SD.rename(oldName, newName)) Serial.println("SUCCESS");
+           else Serial.println("ERROR: Rename failed");
+         } else {
+           Serial.println("ERROR: File not found");
+         }
+       } else {
+         Serial.println("ERROR: Usage rename <old> <new>");
+       }
+     }
+    
+    // Old commands continue...
+    else if (cmdKeyword == "ping") {
+      Serial.println("pong");
+    }
+    else if (cmdKeyword == "test_write") {
+       Serial.println("Creating /test_serial.txt...");
+       // Delete if exists
+       if (SD.exists("/test_serial.txt")) {
+         SD.remove("/test_serial.txt");
+       }
+       
+       File f = SD.open("/test_serial.txt", FILE_WRITE);
+       if (f) {
+         f.print("UART Test");
+         f.close();
+         Serial.println("Writing \"UART Test\"...");
+         
+         // Verify
+         f = SD.open("/test_serial.txt", FILE_READ);
+         if (f) {
+           String content = f.readString();
+           f.close();
+           Serial.printf("Reading back: \"%s\"\n", content.c_str());
+           if (content == "UART Test") {
+             Serial.println("✅ SD Write Access OK");
+           } else {
+             Serial.println("❌ Content mismatch!");
+           }
+         } else {
+           Serial.println("❌ Failed to open for reading");
+         }
+       } else {
+         Serial.println("❌ Failed to open for writing");
+       }
+    }
+
+    // Command: upload <filename> <size>
+    else if (cmd.startsWith("upload ")) {
+       int firstSpace = cmd.indexOf(' ');
+       int secondSpace = cmd.lastIndexOf(' ');
+       
+       if (firstSpace > 0 && secondSpace > firstSpace) {
+           String filename = cmd.substring(firstSpace + 1, secondSpace);
+           String sizeStr = cmd.substring(secondSpace + 1);
+           size_t size = sizeStr.toInt();
+           
+           if (!filename.startsWith("/")) filename = "/" + filename;
+           
+           Serial.printf("Preparing upload: %s (%d bytes)\n", filename.c_str(), size);
+           
+           // Clean up old file
+           if (SD.exists(filename)) SD.remove(filename);
+           
+           uploadFile = SD.open(filename, FILE_WRITE);
+           if (uploadFile) {
+               isReceivingFile = true;
+               uploadRemaining = size;
+               lastUploadActivity = millis();
+               Serial.println("READY"); // Signal to script to start sending
+           } else {
+               Serial.println("ERROR: Create file failed");
+           }
+       } else {
+           Serial.println("ERROR: Usage upload <file> <size>");
+       }
+    }
     else if (cmd.length() > 0) {
       Serial.printf("❌ Unknown command: '%s'\n", cmd.c_str());
       Serial.println("Type 'help' for available commands\n");
@@ -1062,11 +1459,12 @@ void handleSerialCommand() {
 
 // ========== Setup ==========
 void setup() {
+  Serial.setRxBufferSize(8192); // 8KB RX buffer for file uploads
   Serial.begin(460800);
   delay(1000);
   
   Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.println("║  Production-Grade WAV Player          ║");
+  Serial.println("║  Production-Grade WAV Player           ║");
   Serial.println("╚════════════════════════════════════════╝\n");
   
   stateMutex = xSemaphoreCreateMutex();
@@ -1155,6 +1553,7 @@ void setup() {
     &audioTaskHandle,
     1  // Core 1
   );
+
   DEBUG_PRINTF("  Audio task result: %d\n", result1);
   EVENT_LOG(result1 == pdPASS ? "Audio task created" : "Audio task FAILED");
   
@@ -1191,17 +1590,98 @@ void setup() {
   Serial.println("  'help'   - Show commands\n");
 }
 
-void loop() {
-  handleSerialCommand();
+// =========================================================
+// 🚀 FILE UPLOAD HANDLER (Optimized for Speed)
+// =========================================================
+
+#define UPLOAD_BUF_SIZE 8192  // 8KB with flow control
+
+void handleFileUpload() {
+  // Dynamically allocate large buffer to save stack
+  uint8_t *bigBuffer = (uint8_t *)malloc(UPLOAD_BUF_SIZE);
   
-  static unsigned long lastStatus = 0;
-  if (millis() - lastStatus > 30000) {
-    xSemaphoreTake(stateMutex, portMAX_DELAY);
-    Serial.printf("📊 Status: Track %d/%d, Volume %d%%\n", 
-                  currentTrack + 1, playlistSize, currentVolume);
-    xSemaphoreGive(stateMutex);
-    lastStatus = millis();
+  if (!bigBuffer) {
+      Serial.println("ERROR: Malloc failed for upload buffer");
+      isReceivingFile = false;
+      uploadFile.close();
+      return;
+  }
+
+  // ⏸️ Suspend Audio Task to free up CPU/SPI resources
+  if (audioTaskHandle != NULL) {
+      vTaskSuspend(audioTaskHandle);
+  }
+
+  unsigned long lastTime = millis();
+  
+  // We need to flush any pending serial data first? No, we are in the middle of a stream potentially.
+  // Actually, 'upload' command sets isReceivingFile=true and returns. 
+  // The NEXT bytes are file data.
+
+  while (Serial.available() > 0 || uploadRemaining > 0) {
+    // Timeout Check
+    if (millis() - lastTime > 5000) {
+        Serial.println("ERROR: Upload Timeout");
+        break;
+    }
+
+    if (Serial.available() > 0) {
+        lastTime = millis(); // Reset timeout
+        
+        // Read up to buffer size or remaining
+        int available = Serial.available();
+        int toRead = available > UPLOAD_BUF_SIZE ? UPLOAD_BUF_SIZE : available;
+        if (toRead > uploadRemaining) toRead = uploadRemaining;
+
+        // Read directly into big buffer
+        int bytesRead = Serial.readBytes(bigBuffer, toRead);
+        
+        if (bytesRead > 0) {
+            uploadFile.write(bigBuffer, bytesRead);
+            uploadRemaining -= bytesRead;
+        }
+    } else {
+        // Yield if waiting for data
+        vTaskDelay(1 / portTICK_PERIOD_MS); 
+    }
+
+    if (uploadRemaining == 0) {
+      Serial.println("SUCCESS");
+      break;
+    }
   }
   
-  vTaskDelay(100 / portTICK_PERIOD_MS);
+  
+  // Clean up
+  free(bigBuffer);
+  uploadFile.close();
+  isReceivingFile = false;
+  
+  // 🔄 Refresh playlist after upload
+  scanPlaylist();
+  
+  // ▶️ Resume Audio Task
+  if (audioTaskHandle != NULL) {
+      vTaskResume(audioTaskHandle);
+  }
 }
+
+void loop() {
+  if (isReceivingFile) {
+      // 🚫 Don't parse commands during file upload!
+      // Binary data may contain newlines that would be interpreted as commands
+      handleFileUpload();
+  } else {
+      // ✅ Normal command mode
+      handleSerialCommand();
+  }
+  
+  // Status heartbeat (less frequent)
+  static unsigned long lastStatus = 0;
+  if (millis() - lastStatus > 5000) {
+     // Optional heartbeat, removed to reduce noise during operations
+  }
+  
+  vTaskDelay(10 / portTICK_PERIOD_MS);
+}
+

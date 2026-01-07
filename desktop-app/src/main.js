@@ -81,7 +81,8 @@ ipcMain.handle('connect', async (event, path) => {
                 mainWindow.webContents.send('serial-data', json);
             } catch (e) {
                 // Forward raw logs if not JSON
-                console.log("Raw:", line);  // Disabled to reduce boot log noise
+                console.log("Raw:", line);
+                mainWindow.webContents.send('serial-log', line);
             }
         });
 

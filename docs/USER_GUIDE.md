@@ -441,7 +441,7 @@ help
 
 ### PREV + NEXT (組合鍵)
 
-- **長按** (1 秒): 切換循環模式 (Loop Single / Loop All)
+- **長按** (0.5 秒): 切換循環模式 (Loop Single / Loop All)
 
 ---
 
@@ -679,6 +679,30 @@ nvs
 - [NVS_EXPLAINED.md](NVS_EXPLAINED.md) - NVS 儲存機制
 - [PRODUCTION_SUMMARY.md](PRODUCTION_SUMMARY.md) - 產品級功能總結
 - [audio_converter_guide.md](audio_converter_guide.md) - 音訊轉換工具
+
+---
+
+## 🛠️ Serial File Manager (UART)
+
+New in v3.2, you can manage files on the SD card directly over the USB Serial connection without removing the card.
+
+### 1. Connectivity Test
+
+- **Command**: `ping`
+- **Response**: `pong`
+- **Command**: `test_write`
+- **Description**: Creates a test file `/test_serial.txt` to verify SD write permissions.
+
+### 2. File Upload
+
+- **Command**: `upload <remote_path> <size>`
+- **Tools**: Use the provided python script for reliable transfer.
+  ```bash
+  python3 scripts/serial_upload.py /dev/cu.usbserial-XXXX local_file.mp3 /song.mp3
+  ```
+- **Note**: This uses a binary protocol and requires the dedicated script. Do not type this command manually.
+
+---
 
 ---
 

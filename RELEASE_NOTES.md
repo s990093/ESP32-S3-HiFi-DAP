@@ -1,19 +1,28 @@
-# Release Notes - v3.0.0 "Audiophile Edition" 🎵
+# Release Notes - v3.1.0 "Dynamic Loudness" 🎵
 
 ## 🚀 Major Updates
 
-### 1. Audiophile Sound Engine
+### 1. Dynamic Loudness Compensation (Fletcher-Munson)
 
-Incorporated professional DSP features to maximize the 112dB SNR of the PCM5102A DAC:
+Implementing "Product-Grade" DSP logic that adapts real-time to your listening volume:
 
-- **💎 TPDF Dithering**: Added Triangular Probability Density Function dithering to the output stage. This linearizes quantization error, converting digital distortion into undetectable analog noise for a smoother, warmer sound.
-- **🎚️ Optimized V-Shape EQ**: A refined 10-band EQ profile specifically tuned for high-fidelity listening:
-  - **Bass**: +4.5dB boost below 100Hz (Deep, punchy low-end).
-  - **Treble**: +2.5dB boost above 750Hz (Clear, airy highs).
-  - **Headroom**: Integrated **0.7x volume scaler** to prevent clipping during aggressive bass drops.
-- **⚡ Hardware optimizations**: Configured for internal PLL usage (SCK grounded) to minimize jitter.
+- **Low Volume (<30%)**: **+8dB Bass / +4dB Treble**. Maintains deep, rich sound even at night.
+- **High Volume (>80%)**: **+2dB Bass / +1dB Treble**. Tights up the sound for high-SPL listening without booming.
+- **Smooth Transition**: EQ curve interpolates linearly between volume points.
 
-### 2. Hybrid Audio Core
+### 2. Refined EQ Profile (Audiophile V3)
+
+- **Treble Cutoff**: Moved from **750Hz** to **3000Hz (3kHz)**.
+  - _Why?_ To strictly target "Air" and "Clarity" while preserving the natural body of vocals (1kHz-2kHz).
+- **Bass Cutoff**: Maintained at **100Hz** for solid fundamental impact.
+
+### 3. Audiophile Sound Engine (Retained)
+
+- **💎 TPDF Dithering**: Active.
+- **🛡️ Anti-Clipping**: 0.7x Headroom Scaler.
+- **⚡ PCM5102A Optimization**: Internal PLL mode (SCK->GND).
+
+### 4. Hybrid Audio Core
 
 Robust playback support powered by `BackgroundAudio`:
 

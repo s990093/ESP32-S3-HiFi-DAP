@@ -78,16 +78,17 @@ The "Audiophile Edition" uses a dedicated `AudioOutputWithEQ` class that inherit
 [ Decoder Output (WAV/MP3) ]
          │
          ▼
-[ 1. Headroom Scaler ]  <-- Multiplies by 0.707 (-3dB) to prevent clipping
+[ 1. Headroom Scaler ]  <-- Multiplies by 0.707 (-3dB)
          │
          ▼
-[ 2. Float EQ Engine ]  <-- High-precision shelving filters
-         │                  (Bass +4.5dB @ 100Hz, Treble +2.5dB @ 750Hz)
+[ 2. Dynamic EQ Engine ] <-- **NEW**: Variable Gain based on Volume
+         │                   (Low Vol: +8dB Bass / +4dB Treble)
+         │                   (High Vol: +2dB Bass / +1dB Treble)
          ▼
-[ 3. TPDF Dithering ]   <-- Adds triangular noise to linearize quantization error
+[ 3. TPDF Dithering ]   <-- Adds triangular noise
          │
          ▼
-[ 4. Hard Limiter ]     <-- Clamps values to int16 range
+[ 4. Hard Limiter ]     <-- Clamps values
          │
          ▼
 [ I2S DMA Buffer ]

@@ -12,5 +12,9 @@
   "dependencies": {
     "electron": "^39.2.7",
     "serialport": "^13.0.0"
+  },
+  "devDependencies": {
+    "electron-installer-dmg": "^5.0.1",
+    "electron-packager": "^17.1.2"
   }
 }
