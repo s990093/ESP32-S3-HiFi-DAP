@@ -13,6 +13,7 @@
 
 ### 🎵 Audiophile Edition Features
 
+- **🎚️ Configurable Bit Depth** - 16/24/32-bit I2S output for maximum DAC compatibility
 - **🧠 Dynamic Loudness** - Fletcher-Munson inspired compensation (Bass +8dB at low vol, +2dB at high vol).
 - **💎 TPDF Dithering** - Triangular Probability Density Function dithering to eliminate digital quantization distortion.
 - **🎚️ 3kHz AIR Treble** - Refined Treble cutoff (3000Hz) for vocal clarity without harshness.
@@ -33,9 +34,10 @@
 
 ### 🚀 Advanced Features
 
+- **📦 Modular Architecture** - Clean separation: Config, AudioProcessor, PlaylistManager, ButtonHandler, SerialCommands
 - **⚡ FreeRTOS Dual-Core** - Core 0 for UI, Core 1 for audio processing
 - **🧠 Smart Memory Management** - Fixed arrays, no heap fragmentation
-- **🔍 Serial Command Interface** - Debug and control via UART
+- **🔍 Serial Command Interface** - Debug and control via UART (30+ commands)
 - **📊 Real-Time Monitoring** - Memory usage, playback status, event logging
 - **🎛️ Professional Controls** - Volume up/down, prev/next, pause/play
 
@@ -258,14 +260,15 @@ After power cycle, it resumes from the last position.
 
 Connect via serial terminal (460800 baud) and use these commands:
 
-| Command  | Alias        | Description                                      |
-| -------- | ------------ | ------------------------------------------------ |
-| `mem`    | `memory`     | Show memory usage (heap, PSRAM) with visual bars |
-| `tasks`  | `tasks_json` | Show FreeRTOS task stats (CPU%, Stack, State)    |
-| `status` | `s`          | Display current playback state                   |
-| `save`   | -            | Manually save playback position to NVS           |
-| `resume` | -            | Restore playback position from NVS               |
-| `help`   | `h`, `?`     | Show command list                                |
+| Command        | Alias        | Description                                      |
+| -------------- | ------------ | ------------------------------------------------ |
+| `mem`          | `memory`     | Show memory usage (heap, PSRAM) with visual bars |
+| `tasks`        | `tasks_json` | Show FreeRTOS task stats (CPU%, Stack, State)    |
+| `status`       | `s`          | Display current playback state                   |
+| `bitdepth <n>` | -            | Set I2S output bit depth (16/24/32)              |
+| `save`         | -            | Manually save playback position to NVS           |
+| `resume`       | -            | Restore playback position from NVS               |
+| `help`         | `h`, `?`     | Show command list                                |
 
 ### Example: Memory Status
 
@@ -364,7 +367,12 @@ SD Card → Chunk Parser → Volume Control → Fade In/Out → I2S DMA → DAC 
 ESP32-S3-HiFi-DAP/
 ├── src/
 │   └── WavPlayer/
-│       └── WavPlayer.ino          # Main firmware (1457 lines)
+│       ├── WavPlayer.ino          # Main firmware (~350 lines)
+│       ├── Config.h               # Global configuration
+│       ├── AudioProcessor.h/.cpp  # EQ, dithering, bit depth
+│       ├── PlaylistManager.h/.cpp # Playlist scanning
+│       ├── ButtonHandler.h/.cpp   # Button ISRs, NVS
+│       └── SerialCommands.h/.cpp  # Serial interface
 ├── desktop-app/                   # 🆕 Desktop Control Center
 │   ├── src/
 │   │   ├── main.js                # Electron main process
@@ -483,8 +491,8 @@ SD.begin(SD_CS, SPI, 40000000);  // 40MHz (risky)
 
 | Metric               | Value             |
 | -------------------- | ----------------- |
-| Flash Usage          | 376KB (12%)       |
-| SRAM Usage           | 32KB (9.9%)       |
+| Flash Usage          | 486KB (15.4%)     |
+| SRAM Usage           | 30KB (9.3%)       |
 | Boot Time            | ~3 seconds        |
 | Track Change Latency | <100ms            |
 | Button Response      | <10ms (ISR)       |
